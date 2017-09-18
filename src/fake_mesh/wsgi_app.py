@@ -20,6 +20,9 @@ except ImportError:
     import pickle
 
 
+IO_BLOCK_SIZE = 65536
+
+
 BadRequest = Response("Bad Request", status=400)
 NotAuthorized = Response("Unauthorized", status=401)
 Forbidden = Response("Forbidden", status=403)
@@ -57,7 +60,7 @@ def decompress_file(f):
     with f:
         decompressor = zlib.decompressobj(31)
         while True:
-            data = f.read(8192)
+            data = f.read(IO_BLOCK_SIZE)
             if data:
                 yield decompressor.decompress(data)
             else:
@@ -84,9 +87,9 @@ class FakeMeshApplication(object):
             map_size=1024**3,  # 1GB - mostly metadata, so should be fine
             max_dbs=3
         )
-        self.nonce_db = self.db_env.open_db('nonce')
-        self.inbox_db = self.db_env.open_db('inbox')
-        self.increment_db = self.db_env.open_db('increment')
+        self.nonce_db = self.db_env.open_db(b'nonce')
+        self.inbox_db = self.db_env.open_db(b'inbox')
+        self.increment_db = self.db_env.open_db(b'increment')
 
     def __call__(self, environ, start_response):
         return DispatcherMiddleware(
@@ -116,13 +119,13 @@ class FakeMeshApplication(object):
         hash_data = ":".join([
             mailbox, nonce, nonce_count, expected_password, ts
         ])
-        myhash = hmac.HMAC(self._shared_key, hash_data.encode("ASCII"),
+        myhash = hmac.HMAC(self._shared_key, hash_data.encode("ascii"),
                            sha256).hexdigest()
 
         with self.db_env.begin(self.nonce_db, write=True) as auth_tx:
-            nonce_value = ':'.join([mailbox, nonce, nonce_count]).encode('ASCII')
+            nonce_value = ':'.join([mailbox, nonce, nonce_count]).encode('ascii')
             nonce_used = auth_tx.get(nonce_value) is not None
-            auth_tx.put(nonce_value, '1')
+            auth_tx.put(nonce_value, b'1')
         if myhash == hashed and mailbox == requested_mailbox and not nonce_used:
             environ["mesh.mailbox"] = mailbox
             return wrapped(environ, start_response)
@@ -144,14 +147,17 @@ class FakeMeshApplication(object):
 
         if (request_method == "PUT" and
                 environ["PATH_INFO"] == "/status/acknowledged"):
-            self.delete_message(mailbox, message_id.encode('ascii'))
+            message_id = message_id.encode('ascii')
+            assert message_id.startswith(mailbox + b'_')
+            self.delete_message(message_id)
             return Response('OK')
 
         if request_method == "GET":
             if message_id:
                 message_id = message_id.encode('ascii')
+                assert message_id.startswith(mailbox + b'_')
                 chunk_num = pop_path_info(environ) or 1
-                return self.download_chunk(mailbox, message_id, chunk_num)
+                return self.download_chunk(message_id, chunk_num)
             else:
                 messages = {"messages": list(self.list_messages(mailbox))}
                 return Response(json.dumps(messages),
@@ -164,8 +170,10 @@ class FakeMeshApplication(object):
         mailbox_id = environ["mesh.mailbox"].encode('ascii')
         message_id = pop_path_info(environ)
         if message_id:
+            message_id = message_id.encode('ascii')
             chunk_num = pop_path_info(environ)
-            return self.upload_chunk(mailbox_id, message_id, chunk_num)
+            self.save_chunk(environ, message_id, chunk_num)
+            return Response('', status=202)
         else:
             try:
                 recipient = environ["HTTP_MEX_TO"].encode('ascii')
@@ -176,9 +184,10 @@ class FakeMeshApplication(object):
                 return expectation_failed(e)
 
             with self.db_env.begin(self.increment_db, write=True) as tx:
-                message_id = tx.get(recipient, b'0')
-                tx.put(recipient, str(int(message_id) + 1).encode('ascii'))
-            response = self.upload_chunk(recipient, message_id, 1)
+                message_num = tx.get(recipient, b'0')
+                tx.put(recipient, str(int(message_num) + 1).encode('ascii'))
+                message_id = recipient + b'_' + (b'0' * (9 - len(message_num))) + message_num
+            self.save_chunk(environ, message_id, 1)
 
             headers = {_OPTIONAL_HEADERS[key]: value
                        for key, value in environ.items()
@@ -187,43 +196,37 @@ class FakeMeshApplication(object):
             chunk_count = int(chunk_header.rsplit(':', 1)[1])
             metadata = Metadata(chunk_count, headers)
             with self.db_env.begin(self.inbox_db, write=True) as tx:
-                tx.put(recipient + b'_' + message_id, pickle.dumps(metadata))
-            return response
+                tx.put(message_id, pickle.dumps(metadata))
+            message = json.dumps({'messageID': message_id.decode('ascii')})
+            return Response(message, status=202)
 
-    def upload_chunk(self, mailbox_id, message_id, chunk_num):
-        chunk_num = int(chunk_num)
+    def save_chunk(self, environ, message_id, chunk_num):
+        instream = get_input_stream(environ, safe_fallback=False)
+        filename = self.get_filename(message_id, chunk_num)
+        with open(filename, 'wb') as f:
+            if environ.get('HTTP_CONTENT_ENCODING') == 'gzip':
+                while True:
+                    data = instream.read(IO_BLOCK_SIZE)
+                    if data:
+                        f.write(data)
+                    else:
+                        break
+            else:
+                compressor = zlib.compressobj(9, zlib.DEFLATED, 31)
+                while True:
+                    data = instream.read(IO_BLOCK_SIZE)
+                    if data:
+                        f.write(compressor.compress(data))
+                    else:
+                        f.write(compressor.flush(zlib.Z_FINISH))
+                        break
 
-        def handle(environ, start_response):
-            instream = get_input_stream(environ, safe_fallback=False)
-            filename = self.get_filename(mailbox_id, message_id, chunk_num)
-            with open(filename, 'wb') as f:
-                if environ.get('HTTP_CONTENT_ENCODING') == 'gzip':
-                    while True:
-                        data = instream.read(8192)
-                        if data:
-                            f.write(data)
-                        else:
-                            break
-                else:
-                    compressor = zlib.compressobj(9, zlib.DEFLATED, 31)
-                    while True:
-                        data = instream.read(8192)
-                        if data:
-                            f.write(compressor.compress(data))
-                        else:
-                            f.write(compressor.flush(zlib.Z_FINISH))
-                            break
-            message = json.dumps({'messageID': message_id})
-            return Response(message, status=202)(environ, start_response)
-
-        return handle
-
-    def download_chunk(self, mailbox_id, message_id, chunk_num):
+    def download_chunk(self, message_id, chunk_num):
         chunk_num = int(chunk_num)
 
         def handle(environ, start_response):
             with self.db_env.begin(self.inbox_db) as tx:
-                message = pickle.loads(tx.get(mailbox_id + b'_' + message_id))
+                message = pickle.loads(tx.get(message_id))
             status = '206 Partial Content' if message.chunks > chunk_num else '200 OK'
             chunk_header = "{}:{}".format(chunk_num, message.chunks)
             headers = Headers([
@@ -233,7 +236,7 @@ class FakeMeshApplication(object):
             for k, v in message.extra_headers.items():
                 headers[k] = v
 
-            f = open(self.get_filename(mailbox_id, message_id, chunk_num), 'rb')
+            f = open(self.get_filename(message_id, chunk_num), 'rb')
             if "gzip" in environ['HTTP_ACCEPT_ENCODING']:
                 headers['Content-Encoding'] = 'gzip'
                 start_response(status, headers.items())
@@ -248,33 +251,26 @@ class FakeMeshApplication(object):
     def list_messages(self, mailbox_id):
         with self.db_env.begin(self.inbox_db) as tx, tx.cursor() as cursor:
             mailbox_prefix = mailbox_id + b'_'
-            cursor.set_key(mailbox_prefix)
+            cursor.set_range(mailbox_prefix)
             for k in cursor.iternext(values=False):
                 if k.startswith(mailbox_prefix):
-                    yield k[len(mailbox_prefix):]
+                    yield k.decode('ascii')
                 else:
                     break
 
-    def delete_message(self, mailbox_id, message_id):
+    def delete_message(self, message_id):
         with self.db_env.begin(self.inbox_db, write=True) as tx:
-            msg_key = mailbox_id + b'_' + message_id
-            message = pickle.loads(tx.get(msg_key))
-            tx.delete(msg_key)
+            message = pickle.loads(tx.get(message_id))
+            tx.delete(message_id)
 
             for i in range(1, message.chunks + 1):
                 try:
-                    os.remove(self.get_filename(mailbox_id, message_id, i))
+                    os.remove(self.get_filename(message_id, i))
                 except IOError:
                     pass  # If it wasn't there, no biggie
 
-    def get_filename(self, mailbox_id, message_id, chunk_num):
+    def get_filename(self, message_id, chunk_num):
         return os.path.join(
             self.file_dir,
-            '{}_{}_{}.dat'.format(mailbox_id, message_id, chunk_num)
+            '{}_{}.dat'.format(message_id.decode('ascii'), chunk_num)
         )
-
-    def close(self):
-        self.db_env.close()
-
-    def __del__(self):
-        self.close()

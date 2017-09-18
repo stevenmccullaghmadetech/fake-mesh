@@ -56,8 +56,39 @@ class DebugWsgi(object):
             yield data
         print(file=sys.stderr)
 
+
+_data_dir = os.path.dirname(__file__)
+default_ca_cert = os.path.join(_data_dir, "ca.cert.pem")
+default_server_cert = os.path.join(_data_dir, "server.cert.pem")
+default_server_key = os.path.join(_data_dir, "server.key.pem")
+
+
+def make_server(db_dir='/tmp/fake_mesh_dir',
+                host='0.0.0.0',
+                port=8829,
+                ca_cert=default_ca_cert,
+                server_cert=default_server_cert,
+                server_key=default_server_key,
+                debug=False):
+    app = FakeMeshApplication(db_dir)
+    if debug:
+        app = DebugWsgi(app)
+    httpd = Server((host, port), app)
+
+    server_context = ssl.create_default_context(
+        ssl.Purpose.CLIENT_AUTH, cafile=ca_cert)
+    server_context.load_cert_chain(server_cert, server_key)
+    server_context.check_hostname = False
+    server_context.verify_mode = ssl.CERT_REQUIRED
+
+    ssl_adapter = BuiltinSSLAdapter(server_cert, server_key, ca_cert)
+    ssl_adapter.context = server_context
+    httpd.ssl_adapter = ssl_adapter
+
+    return httpd
+
+
 if __name__ == '__main__':
-    _data_dir = os.path.dirname(__file__)
     parser = argparse.ArgumentParser(
         description="Run a fake MESH server"
     )
@@ -65,15 +96,15 @@ if __name__ == '__main__':
         '--dir', default='/tmp/fake_mesh_dir',
         help="Where to store the application data")
     parser.add_argument(
-        '--ca-cert', default=os.path.join(_data_dir, "ca.cert.pem"),
+        '--ca-cert', default=default_ca_cert,
         help='CA certificate to validate incoming connections against'
     )
     parser.add_argument(
-        '--cert', default=os.path.join(_data_dir, "server.cert.pem"),
+        '--cert', default=default_server_cert,
         help='SSL certificate for this server'
     )
     parser.add_argument(
-        '--key', default=os.path.join(_data_dir, "server.key.pem"),
+        '--key', default=default_server_key,
         help='SSL private key for this server'
     )
     parser.add_argument(
@@ -85,19 +116,7 @@ if __name__ == '__main__':
         help="Print data sent and received to stderr")
     args = parser.parse_args()
 
-    app = FakeMeshApplication(args.dir)
-    if args.debug:
-        app = DebugWsgi(app)
-    httpd = Server((args.host, args.port), app)
-
-    server_context = ssl.create_default_context(
-        ssl.Purpose.CLIENT_AUTH, cafile=args.ca_cert)
-    server_context.load_cert_chain(args.cert, args.key)
-    server_context.check_hostname = False
-    server_context.verify_mode = ssl.CERT_REQUIRED
-
-    ssl_adapter = BuiltinSSLAdapter(args.cert, args.key, args.ca_cert)
-    ssl_adapter.context = server_context
-    httpd.ssl_adapter = ssl_adapter
+    httpd = make_server(args.dir, args.host, args.port, args.ca_cert,
+                        args.cert, args.key, args.debug)
 
     httpd.safe_start()
