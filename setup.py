@@ -11,7 +11,7 @@ setup(
     packages=find_packages('src'),
     package_dir={'': 'src'},
     package_data={'fake_mesh': ['*.pem']},
-    requires=[
+    install_requires=[
         'cheroot (>=5.8.3)',
         'lmdb (>=0.93)',
         'six (>=1.10.0)',
