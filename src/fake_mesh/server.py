@@ -108,7 +108,7 @@ if __name__ == '__main__':
         help='SSL private key for this server'
     )
     parser.add_argument(
-        '-p', '--port', default=8829, help="Port to listen on")
+        '-p', '--port', default=8829, type=int, help="Port to listen on")
     parser.add_argument(
         '-i', '--host', default='0.0.0.0', help="Host interface to bind to")
     parser.add_argument(

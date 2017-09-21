@@ -12,9 +12,10 @@ setup(
     package_dir={'': 'src'},
     package_data={'fake_mesh': ['*.pem']},
     install_requires=[
-        'cheroot (>=5.8.3)',
-        'lmdb (>=0.93)',
-        'six (>=1.10.0)',
+        'cheroot (>= 5.8.3)',
+        'lmdb (>= 0.93)',
+        'monotonic (>= 1.3)',
+        'six (>= 1.10.0)',
         'werkzeug (>= 0.12.2)',
         'wrapt (>= 1.10.11)'
     ])
