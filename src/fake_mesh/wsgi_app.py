@@ -199,7 +199,7 @@ class FakeMeshApplication(object):
                 traceback.print_exc()
                 return expectation_failed(e)
 
-            message_id = self._new_message_id(recipient)
+            message_id = self._new_message_id()
             self.save_chunk(environ, recipient, message_id, 1)
 
             headers = {_OPTIONAL_HEADERS[key]: value
@@ -270,20 +270,26 @@ class FakeMeshApplication(object):
 
         return handle
 
-    def _new_message_id(self, mailbox_name):
+    def _new_message_id(self):
         with self.db_env.begin(self.increment_db, write=True) as tx:
-            mailbox_key = mailbox_name.encode('ascii')
-            message_num = int(tx.get(mailbox_key, b'0'))
-            tx.put(mailbox_key, str(message_num + 1).encode('ascii'))
+            message_num = int(tx.get(b'increment', b'0'))
+            tx.put(b'increment', str(message_num + 1).encode('ascii'))
             ts = self.timestamp_source().strftime('%Y%m%d%H%M%S%f')
             return "{ts}_{num:09d}".format(ts=ts, num=message_num)
 
     def list_messages(self, mailbox_id):
         with self.db_env.begin(self.inbox_db) as tx, tx.cursor() as cursor:
             if cursor.set_key(mailbox_id.encode('ascii')):
-                return list(cursor.iternext_dup())
-            else:
-                return []
+                for message_key in cursor.iternext_dup():
+                    message = pickle.loads(
+                        tx.get(message_key, db=self.metadata_db))
+                    message_key = message_key.decode('ascii')
+                    # Only list messages where all chunks received
+                    if all(
+                            os.path.exists(
+                                self.get_filename(mailbox_id, message_key, i))
+                            for i in range(1, message.chunks + 1)):
+                        yield message_key
 
     def delete_message(self, mailbox, message_id):
         message_key = message_id.encode('ascii')
