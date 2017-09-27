@@ -84,7 +84,7 @@ class MonotonicTimestampSource(object):
         )
 
 
-Metadata = collections.namedtuple('Metadata', ['chunks', 'recipient', 'extra_headers'])
+Metadata = collections.namedtuple('Metadata', ['chunks', 'recipient', 'extra_headers', 'all_chunks_received'])
 
 
 class FakeMeshApplication(object):
@@ -189,6 +189,11 @@ class FakeMeshApplication(object):
             with self.db_env.begin(db=self.metadata_db) as tx:
                 metadata = pickle.loads(tx.get(message_id.encode('ascii')))
             self.save_chunk(environ, metadata.recipient, message_id, chunk_num)
+            if int(chunk_num) == metadata.chunks:
+                metadata = Metadata(metadata.chunks, metadata.recipient,
+                                    metadata.extra_headers, True)
+                with self.db_env.begin(db=self.metadata_db, write=True) as tx:
+                    tx.put(message_id.encode('ascii'), pickle.dumps(metadata))
             return Response('', status=202)
         else:
             try:
@@ -207,7 +212,7 @@ class FakeMeshApplication(object):
                        if key in _OPTIONAL_HEADERS}
             chunk_header = environ.get('HTTP_MEX_CHUNK_RANGE', '1:1')
             chunk_count = int(chunk_header.rsplit(':', 1)[1])
-            metadata = Metadata(chunk_count, recipient, headers)
+            metadata = Metadata(chunk_count, recipient, headers, chunk_count == 1)
 
             with self.db_env.begin(write=True) as tx:
                 tx.put(message_id.encode('ascii'),
@@ -285,10 +290,7 @@ class FakeMeshApplication(object):
                         tx.get(message_key, db=self.metadata_db))
                     message_key = message_key.decode('ascii')
                     # Only list messages where all chunks received
-                    if all(
-                            os.path.exists(
-                                self.get_filename(mailbox_id, message_key, i))
-                            for i in range(1, message.chunks + 1)):
+                    if message.all_chunks_received:
                         yield message_key
 
     def delete_message(self, mailbox, message_id):
