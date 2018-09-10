@@ -117,7 +117,8 @@ class FakeMeshApplication(object):
                     DispatcherMiddleware(
                         self.handshake, {
                             '/inbox': self.inbox,
-                            '/outbox': self.outbox
+                            '/outbox': self.outbox,
+                            '/update': self.update
                         }
                     )
                 )
@@ -128,11 +129,13 @@ class FakeMeshApplication(object):
     def authenticated(self, wrapped, instance, args, kwargs):
         environ, start_response = args
         requested_mailbox = pop_path_info(environ)
-        authorization_header = environ.get("HTTP_AUTHORIZATION", "")
-        if not authorization_header.startswith("NHSMESH "):
+        auth_data = environ.get("HTTP_AUTHORIZATION", "")
+        if not auth_data:
             return NotAuthorized(environ, start_response)
 
-        auth_data = authorization_header[8:]
+        if auth_data.startswith("NHSMESH "):
+            auth_data = auth_data[8:]
+
         mailbox, nonce, nonce_count, ts, hashed = auth_data.split(":")
         expected_password = "password"
         hash_data = ":".join([
@@ -157,6 +160,10 @@ class FakeMeshApplication(object):
                        'Mex-OSArchitecture', 'Mex-OSName', 'Mex-OSVersion']:
             assert header in request.headers
         return Response('OK')
+
+    @Request.application
+    def update(self, request):
+        return Response('', '204 No Content', {'Mex-Client-Update-Available': ''})
 
     @responder
     def inbox(self, environ, start_response):
@@ -190,8 +197,7 @@ class FakeMeshApplication(object):
                 metadata = pickle.loads(tx.get(message_id.encode('ascii')))
             self.save_chunk(environ, metadata.recipient, message_id, chunk_num)
             if int(chunk_num) == metadata.chunks:
-                metadata = Metadata(metadata.chunks, metadata.recipient,
-                                    metadata.extra_headers, True)
+                metadata = metadata._replace(all_chunks_received=True)
                 with self.db_env.begin(db=self.metadata_db, write=True) as tx:
                     tx.put(message_id.encode('ascii'), pickle.dumps(metadata))
             return Response('', status=202)
@@ -258,7 +264,8 @@ class FakeMeshApplication(object):
             chunk_header = "{}:{}".format(chunk_num, message.chunks)
             headers = Headers([
                 ('Content-Type', 'application/octet-stream'),
-                ('Mex-Chunk-Range', chunk_header)
+                ('Mex-Chunk-Range', chunk_header),
+                ('Mex-MessageID', str(message_id))
             ])
             for k, v in message.extra_headers.items():
                 headers[k] = v

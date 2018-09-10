@@ -33,7 +33,7 @@ def make_server(db_dir='/tmp/fake_mesh_dir',
     app = FakeMeshApplication(db_dir)
     if debug:
         app = DebugMiddleware(app)
-    if logging:
+    elif logging:
         app = LoggingMiddleware(app, logger=LOGGER_NAME)
     httpd = Server((host, port), app)
 
