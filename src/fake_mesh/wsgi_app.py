@@ -1,11 +1,13 @@
 import collections
+import datetime
 import hmac
 import json
 import lmdb
 import monotonic
 import os
+import random
 import tempfile
-import datetime
+import time
 import traceback
 import wrapt
 import zlib
@@ -23,6 +25,9 @@ except ImportError:
 
 
 IO_BLOCK_SIZE = 65536
+
+
+TIMESTAMP_FORMAT = '%Y%m%d%H%M%S%f'
 
 
 BadRequest = Response("Bad Request", status=400)
@@ -117,6 +122,7 @@ class FakeMeshApplication(object):
                     DispatcherMiddleware(
                         self.handshake, {
                             '/inbox': self.inbox,
+                            '/count': self.count,
                             '/outbox': self.outbox,
                             '/update': self.update
                         }
@@ -184,6 +190,24 @@ class FakeMeshApplication(object):
                 messages = {"messages": list(self.list_messages(mailbox))}
                 return Response(json.dumps(messages),
                                 content_type='application/json')
+        else:
+            return BadRequest
+
+    @responder
+    def count(self, environ, start_response):
+        if environ["REQUEST_METHOD"] == "GET":
+            count = sum(1 for _ in self.list_messages(environ["mesh.mailbox"]))
+            response = {
+                "count": count,
+                "internalID": "{ts}_{rand:06d}_{ts2}".format(
+                    ts=datetime.datetime.utcnow().strftime(TIMESTAMP_FORMAT),
+                    rand=random.randint(0, 999999),
+                    ts2=int(time.time())
+                ),
+                "allResultsIncluded": True
+            }
+            return Response(json.dumps(response),
+                            content_type='application/json')
         else:
             return BadRequest
 
@@ -271,7 +295,7 @@ class FakeMeshApplication(object):
                 headers[k] = v
 
             f = open(self.get_filename(mailbox, message_id, chunk_num), 'rb')
-            if "gzip" in environ['HTTP_ACCEPT_ENCODING']:
+            if "gzip" in environ.get('HTTP_ACCEPT_ENCODING', ''):
                 headers['Content-Encoding'] = 'gzip'
                 start_response(status, headers.items())
                 return wrap_file(environ, f)
@@ -286,7 +310,7 @@ class FakeMeshApplication(object):
         with self.db_env.begin(self.increment_db, write=True) as tx:
             message_num = int(tx.get(b'increment', b'0'))
             tx.put(b'increment', str(message_num + 1).encode('ascii'))
-            ts = self.timestamp_source().strftime('%Y%m%d%H%M%S%f')
+            ts = self.timestamp_source().strftime(TIMESTAMP_FORMAT)
             return "{ts}_{num:09d}".format(ts=ts, num=message_num)
 
     def list_messages(self, mailbox_id):
