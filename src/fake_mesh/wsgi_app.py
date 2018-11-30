@@ -75,6 +75,53 @@ def decompress_file(f):
                 break
 
 
+def make_tracking_data(message_id, metadata):
+    return {
+        "processId": None,
+        "addressType": "ALL",
+        "localId": metadata.extra_headers.get('Mex-LocalID'),
+        "recipientBillingEntity": "Unknown",
+        "dtsId": message_id,
+        "statusSuccess": None,
+        "messageType": "DATA",
+        "statusTimestamp": None,
+        "senderBillingEntity": "Unknown",
+        "senderOdsCode": metadata.extra_headers['Mex-From'][:3],
+        "partnerId": None,
+        "recipientName": metadata.extra_headers['Mex-To'],
+        "senderName": metadata.extra_headers['Mex-From'],
+        "chunkCount": metadata.chunks,
+        "subject": metadata.extra_headers.get('Mex-Subject'),
+        "statusEvent": None,
+        "version": "1.0",
+        "downloadTimestamp": None,
+        "encryptedFlag": metadata.extra_headers.get('Mex-Encrypted'),
+        "statusDescription": None,
+        "senderOrgName": metadata.extra_headers['Mex-From'],
+        "status": "Accepted",
+        "workflowId": metadata.extra_headers.get('Mex-WorkflowID'),
+        "senderOrgCode": metadata.extra_headers['Mex-From'][:3],
+        "recipientOrgName": metadata.extra_headers['Mex-To'][:3],
+        "expiryTime": "21001231235959",
+        "senderSmtp": metadata.extra_headers['Mex-From'].lower() + "@dts.nhs.uk",
+        "fileName": metadata.extra_headers.get('Mex-FileName'),
+        "recipientSmtp": metadata.extra_headers['Mex-To'].lower() + "@dts.nhs.uk",
+        "meshRecipientOdsCode": metadata.extra_headers['Mex-To'][:3],
+        "compressFlag": None,
+        "uploadTimestamp": datetime.datetime.now().strftime(TIMESTAMP_FORMAT),
+        "recipient": metadata.extra_headers['Mex-From'],
+        "contentsBase64": True,  # WAT
+        "sender": metadata.extra_headers['Mex-To'],
+        "checksum": None,
+        "expiryPeriod": None,
+        "isCompressed": metadata.extra_headers.get('Mex-Compressed'),
+        "recipientOrgCode": metadata.extra_headers['Mex-To'][:3],
+        "messageId": message_id,
+        "isInternalSender": False,
+        "statusCode": None,
+        "fileSize": 0  # So sue me
+    }
+
 class MonotonicTimestampSource(object):
     def __init__(self):
         self._ts_minus_monotonic = (
@@ -106,12 +153,13 @@ class FakeMeshApplication(object):
         self.db_env = lmdb.Environment(
             os.path.join(storage_dir, 'db'),
             map_size=1024**3,  # 1GB - mostly metadata, so should be fine
-            max_dbs=4
+            max_dbs=5
         )
         self.nonce_db = self.db_env.open_db(b'nonce')
         self.inbox_db = self.db_env.open_db(b'inbox', dupsort=True)
         self.metadata_db = self.db_env.open_db(b'metadata')
         self.increment_db = self.db_env.open_db(b'increment')
+        self.tracking_db = self.db_env.open_db(b'tracking')
 
         self.timestamp_source = MonotonicTimestampSource()
 
@@ -215,7 +263,17 @@ class FakeMeshApplication(object):
     def outbox(self, environ, start_response):
         mailbox_id = environ["mesh.mailbox"]
         message_id = pop_path_info(environ)
-        if message_id:
+        if message_id == 'tracking':
+            local_id = pop_path_info(environ)
+            if not local_id:
+                return BadRequest
+            with self.db_env.begin(db=self.tracking_db) as tx:
+                tracking_data = tx.get(local_id.encode('ascii'))
+                if not tracking_data:
+                    return NotFound
+                else:
+                    return Response(tracking_data, content_type='application/json')
+        elif message_id:
             chunk_num = pop_path_info(environ)
             with self.db_env.begin(db=self.metadata_db) as tx:
                 metadata = pickle.loads(tx.get(message_id.encode('ascii')))
@@ -252,6 +310,12 @@ class FakeMeshApplication(object):
                        message_id.encode('ascii'),
                        dupdata=True,
                        db=self.inbox_db)
+                local_id = metadata.extra_headers.get('Mex-LocalID')
+                if local_id:
+                    tracking_info = make_tracking_data(message_id, metadata)
+                    tx.put(local_id.encode('UTF-8'),
+                           json.dumps(tracking_info).encode('utf-8'),
+                           db=self.tracking_db)
 
             message = json.dumps({'messageID': message_id})
             return Response(message, status=202)
@@ -281,9 +345,14 @@ class FakeMeshApplication(object):
         chunk_num = int(chunk_num)
 
         def handle(environ, start_response):
-            with self.db_env.begin(self.metadata_db) as tx:
+            with self.db_env.begin(self.metadata_db, write=True) as tx:
                 message = pickle.loads(tx.get(message_id.encode('ascii')))
-            assert message.recipient == mailbox
+                self._update_tracking(
+                    tx, message,
+                    downloadTimestamp=datetime.datetime.now().strftime(TIMESTAMP_FORMAT)
+                )
+                assert message.recipient == mailbox
+
             status = '206 Partial Content' if message.chunks > chunk_num else '200 OK'
             chunk_header = "{}:{}".format(chunk_num, message.chunks)
             headers = Headers([
@@ -305,6 +374,19 @@ class FakeMeshApplication(object):
                 return decompress_file(f)
 
         return handle
+
+    def _update_tracking(self, tx, message, **kwargs):
+        local_id = message.extra_headers.get('Mex-LocalID')
+        if local_id:
+            tracking_data = json.loads(
+                tx.get(local_id.encode('utf-8'), db=self.tracking_db).decode('utf-8')
+            )
+            tracking_data.update(kwargs)
+            tx.put(
+                local_id.encode('utf-8'),
+                json.dumps(tracking_data).encode('utf-8'),
+                db=self.tracking_db
+            )
 
     def _new_message_id(self):
         with self.db_env.begin(self.increment_db, write=True) as tx:
@@ -328,6 +410,7 @@ class FakeMeshApplication(object):
         message_key = message_id.encode('ascii')
         with self.db_env.begin(write=True) as tx:
             message = pickle.loads(tx.get(message_key, db=self.metadata_db))
+            self._update_tracking(tx, message, status='Acknowledged')
             assert message.recipient == mailbox
             tx.delete(message_key, db=self.metadata_db)
             tx.delete(mailbox.encode('ascii'),
