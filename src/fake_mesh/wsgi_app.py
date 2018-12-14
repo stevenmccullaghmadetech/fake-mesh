@@ -109,9 +109,9 @@ def make_tracking_data(message_id, metadata):
         "meshRecipientOdsCode": metadata.extra_headers['Mex-To'][:3],
         "compressFlag": None,
         "uploadTimestamp": datetime.datetime.now().strftime(TIMESTAMP_FORMAT),
-        "recipient": metadata.extra_headers['Mex-From'],
+        "recipient": metadata.extra_headers['Mex-To'],
         "contentsBase64": True,  # WAT
-        "sender": metadata.extra_headers['Mex-To'],
+        "sender": metadata.extra_headers['Mex-From'],
         "checksum": None,
         "expiryPeriod": None,
         "isCompressed": metadata.extra_headers.get('Mex-Compressed'),
