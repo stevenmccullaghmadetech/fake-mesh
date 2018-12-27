@@ -28,7 +28,7 @@ class DebugMiddleware(object):
 
             def read(*args):
                 result = old_body_read(*args)
-                print(result, file=sys.stderr)
+                print(result.decode('iso-8859-1', 'replace'), file=sys.stderr)
                 return result
 
             body.read = read
@@ -44,7 +44,7 @@ class DebugMiddleware(object):
                 return start_response(status, headers, exc_info)
 
         for data in self._app(environ, inner_start_response):
-            sys.stderr.write(data)
+            sys.stderr.write(data.decode('iso-8859-1', 'replace'))
             yield data
         print(file=sys.stderr)
 
