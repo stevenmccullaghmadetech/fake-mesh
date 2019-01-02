@@ -1,0 +1,12 @@
+version: '3.7'
+
+services:
+  meshin:
+    image: ${DOCKER_REGISTRY-}meshin
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8829:8829"
+    volumes:
+      -  ./fake_mesh_dir:/tmp/fake_mesh_dir
