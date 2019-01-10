@@ -1,8 +1,8 @@
 version: '3.7'
 
 services:
-  meshin:
-    image: ${DOCKER_REGISTRY-}meshin
+  fake_mesh:
+    image: ${DOCKER_REGISTRY-}fake_mesh
     build:
       context: .
       dockerfile: Dockerfile
