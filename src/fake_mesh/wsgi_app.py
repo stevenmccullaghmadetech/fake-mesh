@@ -50,7 +50,7 @@ _OPTIONAL_HEADERS = {
     "HTTP_MEX_COMPRESSED": "Mex-Compressed",
     "HTTP_MEX_CHUNK_RANGE": "Mex-Chunk-Range",
     "HTTP_MEX_FROM": "Mex-From",
-    "HTTP_MEX_TO": "Mex-To",
+    "HTTP_MEX_TO": "Mex-To"
 }
 
 
@@ -175,7 +175,8 @@ class FakeMeshApplication(object):
                             '/update': self.update
                         }
                     )
-                )
+                ),
+                '/_fake_ndr': self._fake_ndr
             }
         )(environ, start_response)
 
@@ -298,6 +299,9 @@ class FakeMeshApplication(object):
             headers = {_OPTIONAL_HEADERS[key]: value
                        for key, value in environ.items()
                        if key in _OPTIONAL_HEADERS}
+            headers['Mex-Statustimestamp'] = datetime.datetime.now().strftime(TIMESTAMP_FORMAT)
+            headers['Mex-Statussuccess'] = 'SUCCESS'
+            headers['Mex-Statusdescription'] = "Transferred to recipient mailbox"
             chunk_header = environ.get('HTTP_MEX_CHUNK_RANGE', '1:1')
             chunk_count = int(chunk_header.rsplit(':', 1)[1])
             metadata = Metadata(chunk_count, recipient, headers, chunk_count == 1)
@@ -319,6 +323,38 @@ class FakeMeshApplication(object):
 
             message = json.dumps({'messageID': message_id})
             return Response(message, status=202)
+
+    @responder
+    def _fake_ndr(self, environ, start_response):
+        # POST an empty message to /_fake_ndr/RECIPIENT to add an NDR to recipient's mailbox
+        mailbox_id = pop_path_info(environ)
+        linked_message_id = self._new_message_id()
+        message_id = self._new_message_id()
+        if environ['REQUEST_METHOD'] != 'POST':
+            return BadRequest
+        headers = {
+            'Mex-Statustimestamp': datetime.datetime.now().strftime(TIMESTAMP_FORMAT),
+            'Mex-Statussuccess': 'ERROR',
+            'Mex-Statusdescription': "Unregistered to address",
+            'Mex-To': mailbox_id,
+            'Mex-Linkedmsgid': linked_message_id,
+            'Mex-Messagetype': 'REPORT',
+            'Mex-Subject': 'NDR',
+        }
+        metadata = Metadata(1, mailbox_id, headers, True)
+        with self.db_env.begin(write=True) as tx:
+            tx.put(message_id.encode('ascii'),
+                   pickle.dumps(metadata),
+                   db=self.metadata_db)
+            tx.put(mailbox_id.encode('ascii'),
+                   message_id.encode('ascii'),
+                   dupdata=True,
+                   db=self.inbox_db)
+            filename = self.get_filename(mailbox_id, message_id, 1)
+            with open(filename, 'wb') as f:
+                compressor = zlib.compressobj(9, zlib.DEFLATED, 31)
+                f.write(compressor.flush(zlib.Z_FINISH))
+        return Response(message_id.encode('ascii'))
 
     def save_chunk(self, environ, mailbox, message_id, chunk_num):
         instream = get_input_stream(environ, safe_fallback=False)
