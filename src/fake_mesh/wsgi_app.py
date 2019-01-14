@@ -463,3 +463,8 @@ class FakeMeshApplication(object):
             self.file_dir,
             '{}_{}_{}.dat'.format(mailbox, message_id, chunk_num)
         )
+
+    def close(self):
+        self.db_env.close()
+
+    __del__ = close

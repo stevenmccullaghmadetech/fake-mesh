@@ -5,6 +5,7 @@ import argparse
 import logging
 import logging.handlers
 import os
+import signal
 import ssl
 
 from cheroot.wsgi import Server
@@ -95,5 +96,9 @@ if __name__ == '__main__':
         else:
             logger.addHandler(logging.StreamHandler())
         logger.info('Running Fake Mesh on %s:%s', args.host, args.port)
+
+    def shutdown_handler(signal, frame):
+        httpd.stop()
+    signal.signal(signal.SIGTERM, shutdown_handler)
 
     httpd.safe_start()
