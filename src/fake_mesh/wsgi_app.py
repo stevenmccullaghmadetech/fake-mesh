@@ -200,9 +200,10 @@ class FakeMeshApplication(object):
                            sha256).hexdigest()
 
         with self.db_env.begin(self.nonce_db, write=True) as auth_tx:
-            nonce_value = ':'.join([mailbox, nonce, nonce_count]).encode('ascii')
-            nonce_used = auth_tx.get(nonce_value) is not None
-            auth_tx.put(nonce_value, b'1')
+            nonce_key = ':'.join([mailbox, nonce]).encode('ascii')
+            current_nonce_count = auth_tx.get(nonce_key, b'-1').decode('ascii')
+            nonce_used = nonce_count <= current_nonce_count
+            auth_tx.put(nonce_key, nonce_count.encode('ascii'))
         if myhash == hashed and mailbox == requested_mailbox and not nonce_used:
             environ["mesh.mailbox"] = mailbox
             return wrapped(environ, start_response)
