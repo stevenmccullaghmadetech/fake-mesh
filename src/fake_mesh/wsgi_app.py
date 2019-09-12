@@ -202,7 +202,7 @@ class FakeMeshApplication(object):
         with self.db_env.begin(self.nonce_db, write=True) as auth_tx:
             nonce_key = ':'.join([mailbox, nonce]).encode('ascii')
             current_nonce_count = auth_tx.get(nonce_key, b'-1').decode('ascii')
-            nonce_used = nonce_count <= current_nonce_count
+            nonce_used = int(nonce_count) <= int(current_nonce_count)
             auth_tx.put(nonce_key, nonce_count.encode('ascii'))
         if myhash == hashed and mailbox == requested_mailbox and not nonce_used:
             environ["mesh.mailbox"] = mailbox
