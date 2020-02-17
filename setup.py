@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='Fake Mesh',
-    version='0.1.4',
+    version='0.1.5',
     description='A fake implementation of NHS Digital MESH, but one that should stand up to modest load',
     author='James Pickering',
     author_email='james.pickering@airelogic.com',

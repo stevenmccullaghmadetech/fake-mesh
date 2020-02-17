@@ -15,7 +15,12 @@ import zlib
 from hashlib import sha256
 from werkzeug.wrappers import Request, Response
 from werkzeug.wsgi import pop_path_info, responder, wrap_file, \
-                          get_input_stream, DispatcherMiddleware
+                          get_input_stream
+try:
+    from werkzeug.middleware.dispatcher import DispatcherMiddleware
+except ImportError:
+    # Support pre-1.0 Werkzeug
+    from werkzeug.wsgi import DispatcherMiddleware
 from wsgiref.headers import Headers
 
 try:
@@ -45,9 +50,11 @@ _OPTIONAL_HEADERS = {
     "HTTP_MEX_MESSAGETYPE": "Mex-MessageType",
     "HTTP_MEX_PROCESSID": "Mex-ProcessID",
     "HTTP_MEX_SUBJECT": "Mex-Subject",
-    "HTTP_MEX_ENCRYPTED": "Mex-Encrypted",
-    "HTTP_MEX_COMPRESS": "Mex-Compress",
+    "HTTP_MEX_CONTENT_ENCRYPTED": "Mex-Content-Encrypted",
+    "HTTP_MEX_CONTENT_COMPRESS": "Mex-Content-Compress",
     "HTTP_MEX_COMPRESSED": "Mex-Compressed",
+    "HTTP_MEX_CONTENT_COMPRESSED": "Mex-Content-Compressed",
+    "HTTP_MEX_CONTENT_CHECKSUM": "Mex-Content-Checksum",
     "HTTP_MEX_CHUNK_RANGE": "Mex-Chunk-Range",
     "HTTP_MEX_FROM": "Mex-From",
     "HTTP_MEX_TO": "Mex-To"
