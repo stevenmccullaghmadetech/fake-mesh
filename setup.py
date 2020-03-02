@@ -1,11 +1,17 @@
 #!/usr/bin/env python
 
 from setuptools import setup, find_packages
+from os.path import dirname, join
+
+with open(join(dirname(__file__), 'README.md')) as f:
+    long_description = f.read()
 
 setup(
     name='Fake Mesh',
     version='0.1.5',
     description='A fake implementation of NHS Digital MESH, but one that should stand up to modest load',
+    long_description=long_description,
+    long_description_content_type='text/markdown',
     author='James Pickering',
     author_email='james.pickering@airelogic.com',
     packages=find_packages('src'),
