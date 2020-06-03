@@ -49,3 +49,11 @@ optional arguments:
   --log-file [LOG_FILE]
                         File to use for logging - use stderr if not specified
 ```
+
+Developing
+-----------
+
+Install the module locally
+
+    pip install -e .
+    

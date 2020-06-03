@@ -147,7 +147,7 @@ Metadata = collections.namedtuple('Metadata', ['chunks', 'recipient', 'extra_hea
 
 
 class FakeMeshApplication(object):
-    def __init__(self, storage_dir=None, shared_key=b"BackBone"):
+    def __init__(self, storage_dir=None, shared_key=b"SharedKey"):
         self._shared_key = shared_key
         if not storage_dir:
             storage_dir = tempfile.mkdtemp()
