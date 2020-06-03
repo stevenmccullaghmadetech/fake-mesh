@@ -4,6 +4,16 @@ Fake MESH
 A lightweight implementation of [NHS Digital's MESH API](https://meshapi.docs.apiary.io/), for
 testing purposes.
 
+Docker
+----------
+
+Use docker-compose to run a Fake MESH in Docker.
+
+```
+docker-compose build fake-mesh
+docker-compose up fake-mesh
+```
+
 Installing
 ----------
 
