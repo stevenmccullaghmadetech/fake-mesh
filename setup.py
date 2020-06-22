@@ -8,7 +8,7 @@ with open(join(dirname(__file__), 'README.md')) as f:
 
 setup(
     name='Fake Mesh',
-    version='0.1.5',
+    version='0.1.6',
     description='A fake implementation of NHS Digital MESH, but one that should stand up to modest load',
     long_description=long_description,
     long_description_content_type='text/markdown',
