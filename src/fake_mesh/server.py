@@ -7,11 +7,12 @@ import logging.handlers
 import os
 import signal
 import ssl
+import threading
 
 from cheroot.wsgi import Server
 from cheroot.ssl.builtin import BuiltinSSLAdapter
 
-from .wsgi_app import FakeMeshApplication
+from .wsgi_app import FakeMeshApplication, HealthcheckApplication
 from .wsgi_helpers import DebugMiddleware, LoggingMiddleware
 
 
@@ -51,6 +52,11 @@ def make_server(db_dir='/tmp/fake_mesh_dir',
     return httpd
 
 
+def make_healthcheck_server(host='0.0.0.0', port=8888):
+    app = HealthcheckApplication()
+    return Server((host, port), app)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Run a fake MESH server"
@@ -86,6 +92,7 @@ if __name__ == '__main__':
 
     httpd = make_server(args.dir, args.host, args.port, args.ca_cert,
                         args.cert, args.key, args.debug, not args.no_log)
+    healthcheck = make_healthcheck_server(host=args.host)
 
     if not args.no_log:
         logger = logging.getLogger(LOGGER_NAME)
@@ -96,9 +103,14 @@ if __name__ == '__main__':
         else:
             logger.addHandler(logging.StreamHandler())
         logger.info('Running Fake Mesh on %s:%s', args.host, args.port)
+        logger.info('Running Healhcheck on %s:8888', args.host)
 
     def shutdown_handler(signal, frame):
         httpd.stop()
+        healthcheck.stop()
     signal.signal(signal.SIGTERM, shutdown_handler)
+
+    healthcheck.prepare()
+    threading.Thread(target=healthcheck.serve).start()
 
     httpd.safe_start()

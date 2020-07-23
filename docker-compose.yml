@@ -8,5 +8,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8829:8829"
+      - "8888:8888"
     volumes:
       -  ./fake_mesh_dir:/tmp/fake_mesh_dir

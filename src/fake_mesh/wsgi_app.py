@@ -146,6 +146,22 @@ class MonotonicTimestampSource(object):
 Metadata = collections.namedtuple('Metadata', ['chunks', 'recipient', 'extra_headers', 'all_chunks_received'])
 
 
+class HealthcheckApplication(object):
+    def __init__(self):
+        pass
+
+    def __call__(self, environ, start_response):
+        return DispatcherMiddleware(
+            NotFound, {
+                '/healthcheck': self.healthcheck
+            }
+        )(environ, start_response)
+
+    @responder
+    def healthcheck(self, environ, start_response):
+        return Response()
+
+
 class FakeMeshApplication(object):
     def __init__(self, storage_dir=None, shared_key=b"SharedKey"):
         self._shared_key = shared_key

@@ -4,14 +4,20 @@ Fake MESH
 A lightweight implementation of [NHS Digital's MESH API](https://meshapi.docs.apiary.io/), for
 testing purposes.
 
+Releases
+----------
+
+0.1.6: Changed default shared key, added documentation
+0.2.0: Adds a /healthcheck to aid deployment into clusters
+
 Docker
 ----------
 
 Use docker-compose to run a Fake MESH in Docker.
 
 ```
-docker-compose build fake-mesh
-docker-compose up fake-mesh
+docker-compose build fake_mesh
+docker-compose up fake_mesh
 ```
 
 Installing
@@ -60,10 +66,33 @@ optional arguments:
                         File to use for logging - use stderr if not specified
 ```
 
+Healthcheck
+-----------
+
+In addition to the MESH endpoints the server runs a healthcheck endpoint
+
+    http://HOST:8888/healthcheck
+    
+which always responds with a 200 status and empty body.
+
 Developing
 -----------
 
-Install the module locally
+Setup PyCharm interpreter: create new virtual environment
 
-    pip install -e .
+    File -> Preferences -> Project: fake-mesh -> Project Interpreter -> [GEAR] -> Add…
+    Virtualenv Environment
+    Location: fake-mesh/venv
+    Base interpreter: 3.8
     
+Activate the venv and install dependencies
+
+    $ source venv/bin/activate
+    $ pip install -e .
+
+Create a run configuration
+
+    Run/Debug Configurations -> Add -> Python
+    Choose “Module name” instead of “Script path”
+    Module name: fake_mesh.server
+    Python interpreter: the interpreter you just created

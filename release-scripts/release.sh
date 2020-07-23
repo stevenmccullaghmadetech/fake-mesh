@@ -3,7 +3,7 @@
 set -e
 
 export BUILD_TAG=latest
-export RELEASE_VERSION=0.1.6
+export RELEASE_VERSION=0.2.0
 export DOCKER_REGISTRY=local/
 cd ..
 
