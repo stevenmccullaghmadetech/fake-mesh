@@ -1,3 +1,8 @@
+
+# This project is  no longer being actively maintained please see [mesh-sandbox](https://github.com/NHSDigital/mesh-sandbox)  which provides a locally testable version of MESH and is maintained by the MESH team  
+
+
+--------------------------------------------
 Fake MESH
 =========
 
@@ -72,7 +77,7 @@ Healthcheck
 In addition to the MESH endpoints the server runs a healthcheck endpoint
 
     http://HOST:8888/healthcheck
-    
+
 which always responds with a 200 status and empty body.
 
 Developing
@@ -84,7 +89,7 @@ Setup PyCharm interpreter: create new virtual environment
     Virtualenv Environment
     Location: fake-mesh/venv
     Base interpreter: 3.8
-    
+
 Activate the venv and install dependencies
 
     $ source venv/bin/activate

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[metadata]
+name = "fake_mesh"
+version = "0.1.7"
+
+[options]
+packages = find:
+python_requires = >=3.7
+
+[options.entry_points]
+console_scripts =
+    fake_mesh_server = fake_mesh.server:main
+
+[options.packages.find]
+where = src

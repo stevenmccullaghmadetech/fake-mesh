@@ -92,6 +92,7 @@ if __name__ == '__main__':
 
     httpd = make_server(args.dir, args.host, args.port, args.ca_cert,
                         args.cert, args.key, args.debug, not args.no_log)
+
     healthcheck = make_healthcheck_server(host=args.host)
 
     if not args.no_log:

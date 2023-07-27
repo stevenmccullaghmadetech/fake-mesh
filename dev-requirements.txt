@@ -1,0 +1,7 @@
+pip
+setuptools
+setuptools_scm[toml]
+tox
+twine
+wheel
+mesh_client

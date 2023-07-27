@@ -13,9 +13,10 @@ import wrapt
 import zlib
 
 from hashlib import sha256
+from six.moves.urllib.parse import parse_qs
 from werkzeug.wrappers import Request, Response
 from werkzeug.wsgi import pop_path_info, responder, wrap_file, \
-                          get_input_stream
+                          get_input_stream, get_query_string
 try:
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
 except ImportError:
@@ -28,11 +29,15 @@ try:
 except ImportError:
     import pickle
 
+from fake_mesh.key_helper import get_shared_key_from_environ
+
 
 IO_BLOCK_SIZE = 65536
 
 
-TIMESTAMP_FORMAT = '%Y%m%d%H%M%S%f'
+ID_TIMESTAMP_FORMAT = '%Y%m%d%H%M%S%f'
+TIMESTAMP_FORMAT = '%Y%m%d%H%M%S'
+MSG_TRACKING_PREFIX = b'msg_id:'
 
 
 BadRequest = Response("Bad Request", status=400)
@@ -145,7 +150,6 @@ class MonotonicTimestampSource(object):
 
 Metadata = collections.namedtuple('Metadata', ['chunks', 'recipient', 'extra_headers', 'all_chunks_received'])
 
-
 class HealthcheckApplication(object):
     def __init__(self):
         pass
@@ -163,8 +167,9 @@ class HealthcheckApplication(object):
 
 
 class FakeMeshApplication(object):
-    def __init__(self, storage_dir=None, shared_key=b"SharedKey"):
+    def __init__(self, storage_dir=None, shared_key=get_shared_key_from_environ(), client_password="password"):
         self._shared_key = shared_key
+        self._client_password = client_password
         if not storage_dir:
             storage_dir = tempfile.mkdtemp()
         self.file_dir = os.path.join(storage_dir, 'storage')
@@ -199,7 +204,8 @@ class FakeMeshApplication(object):
                         }
                     )
                 ),
-                '/_fake_ndr': self._fake_ndr
+                '/_fake_ndr': self._fake_ndr,
+                '/endpointlookup/mesh': self.endpoint_lookup
             }
         )(environ, start_response)
 
@@ -215,7 +221,7 @@ class FakeMeshApplication(object):
             auth_data = auth_data[8:]
 
         mailbox, nonce, nonce_count, ts, hashed = auth_data.split(":")
-        expected_password = "password"
+        expected_password = self._client_password
         hash_data = ":".join([
             mailbox, nonce, nonce_count, expected_password, ts
         ])
@@ -273,7 +279,7 @@ class FakeMeshApplication(object):
             response = {
                 "count": count,
                 "internalID": "{ts}_{rand:06d}_{ts2}".format(
-                    ts=datetime.datetime.utcnow().strftime(TIMESTAMP_FORMAT),
+                    ts=datetime.datetime.utcnow().strftime(ID_TIMESTAMP_FORMAT),
                     rand=random.randint(0, 999999),
                     ts2=int(time.time())
                 ),
@@ -286,67 +292,112 @@ class FakeMeshApplication(object):
 
     @responder
     def outbox(self, environ, start_response):
-        mailbox_id = environ["mesh.mailbox"]
+
         message_id = pop_path_info(environ)
         if message_id == 'tracking':
-            local_id = pop_path_info(environ)
-            if not local_id:
-                return BadRequest
-            with self.db_env.begin(db=self.tracking_db) as tx:
-                tracking_data = tx.get(local_id.encode('ascii'))
-                if not tracking_data:
-                    return NotFound
-                else:
-                    return Response(tracking_data, content_type='application/json')
+            return self.tracking(environ, start_response)
         elif message_id:
-            chunk_num = pop_path_info(environ)
-            with self.db_env.begin(db=self.metadata_db) as tx:
-                metadata = pickle.loads(tx.get(message_id.encode('ascii')))
-            self.save_chunk(environ, metadata.recipient, message_id, chunk_num)
-            if int(chunk_num) == metadata.chunks:
-                metadata = metadata._replace(all_chunks_received=True)
-                with self.db_env.begin(db=self.metadata_db, write=True) as tx:
-                    tx.put(message_id.encode('ascii'), pickle.dumps(metadata))
-            return Response('', status=202)
+            return self.handle_chunk_upload(message_id, environ, start_response)
         else:
-            try:
-                recipient = environ["HTTP_MEX_TO"]
-                sender = environ["HTTP_MEX_FROM"]
-                assert mailbox_id == sender
-            except Exception as e:
-                traceback.print_exc()
-                return expectation_failed(e)
+            return self.handle_first_chunk(environ, start_response)
 
-            message_id = self._new_message_id()
-            self.save_chunk(environ, recipient, message_id, 1)
+    def tracking(self, environ, start_response):
+        local_id = pop_path_info(environ)
+        qs = get_query_string(environ)
+        message_id = parse_qs(qs).get('messageID', [None])[0]
+        if not local_id and not message_id:
+            return BadRequest
+        with self.db_env.begin(db=self.tracking_db) as tx:
+            if local_id:
+                tracking_data = tx.get(local_id.encode('ascii'))
+            else:
+                msg_key = message_id.encode('ascii')
+                tracking_data = tx.get(MSG_TRACKING_PREFIX + msg_key)
+                if not tracking_data:
+                    metadata = pickle.loads(tx.get(msg_key, db=self.metadata_db))
+                    tracking_data = json.dumps(
+                        make_tracking_data(message_id, metadata)
+                    ).encode('utf-8')
+            if not tracking_data:
+                return NotFound
+            else:
+                return Response(tracking_data, content_type='application/json')
 
-            headers = {_OPTIONAL_HEADERS[key]: value
-                       for key, value in environ.items()
-                       if key in _OPTIONAL_HEADERS}
-            headers['Mex-Statustimestamp'] = datetime.datetime.now().strftime(TIMESTAMP_FORMAT)
-            headers['Mex-Statussuccess'] = 'SUCCESS'
-            headers['Mex-Statusdescription'] = "Transferred to recipient mailbox"
-            chunk_header = environ.get('HTTP_MEX_CHUNK_RANGE', '1:1')
-            chunk_count = int(chunk_header.rsplit(':', 1)[1])
-            metadata = Metadata(chunk_count, recipient, headers, chunk_count == 1)
+    def handle_chunk_upload(self, message_id, environ, start_response):
+        chunk_num = pop_path_info(environ)
+        with self.db_env.begin(db=self.metadata_db) as tx:
+            metadata = pickle.loads(tx.get(message_id.encode('ascii')))
+        self.save_chunk(environ, metadata.recipient, message_id, chunk_num)
+        if int(chunk_num) == metadata.chunks:
+            metadata = metadata._replace(all_chunks_received=True)
+            with self.db_env.begin(db=self.metadata_db, write=True) as tx:
+                tx.put(message_id.encode('ascii'), pickle.dumps(metadata))
+        return Response('', status=202)
 
-            with self.db_env.begin(write=True) as tx:
-                tx.put(message_id.encode('ascii'),
-                       pickle.dumps(metadata),
-                       db=self.metadata_db)
-                tx.put(recipient.encode('ascii'),
-                       message_id.encode('ascii'),
-                       dupdata=True,
-                       db=self.inbox_db)
-                local_id = metadata.extra_headers.get('Mex-LocalID')
-                if local_id:
-                    tracking_info = make_tracking_data(message_id, metadata)
-                    tx.put(local_id.encode('UTF-8'),
-                           json.dumps(tracking_info).encode('utf-8'),
-                           db=self.tracking_db)
+    def handle_first_chunk(self, environ, start_response):
+        mailbox_id = environ["mesh.mailbox"]
+        try:
+            recipient = environ["HTTP_MEX_TO"]
+            sender = environ["HTTP_MEX_FROM"]
+            assert mailbox_id == sender
+        except Exception as e:
+            traceback.print_exc()
+            return expectation_failed(e)
 
-            message = json.dumps({'messageID': message_id})
-            return Response(message, status=202)
+        message_id = self._new_message_id()
+        self.save_chunk(environ, recipient, message_id, 1)
+
+        headers = {_OPTIONAL_HEADERS[key]: value
+                   for key, value in environ.items()
+                   if key in _OPTIONAL_HEADERS}
+
+        if 'Mex-FileName' not in headers:
+            headers['Mex-FileName'] = "{}.dat".format(message_id)
+        headers['Mex-Statustimestamp'] = datetime.datetime.now().strftime(TIMESTAMP_FORMAT)
+        headers['Mex-Statussuccess'] = 'SUCCESS'
+        headers['Mex-Statusdescription'] = "Transferred to recipient mailbox"
+        headers['Mex-Statusevent'] = 'TRANSFER'
+        chunk_header = environ.get('HTTP_MEX_CHUNK_RANGE', '1:1')
+        chunk_count = int(chunk_header.rsplit(':', 1)[1])
+        metadata = Metadata(chunk_count, recipient, headers, chunk_count == 1)
+
+        with self.db_env.begin(write=True) as tx:
+            tx.put(message_id.encode('ascii'),
+                   pickle.dumps(metadata),
+                   db=self.metadata_db)
+            tx.put(recipient.encode('ascii'),
+                   message_id.encode('ascii'),
+                   dupdata=True,
+                   db=self.inbox_db)
+            local_id = metadata.extra_headers.get('Mex-LocalID')
+            if local_id:
+                tracking_info = make_tracking_data(message_id, metadata)
+                tx.put(local_id.encode('UTF-8'),
+                       json.dumps(tracking_info).encode('utf-8'),
+                       db=self.tracking_db)
+
+        message = json.dumps({'messageID': message_id})
+        return Response(message, status=202)
+
+    @responder
+    def endpoint_lookup(self, environ, start_response):
+        org_code = pop_path_info(environ)
+        workflow_id = pop_path_info(environ)
+        if not org_code or not workflow_id:
+            return NotFound
+        result = {
+            "query_id": "{ts:%Y%m%d%H%M%S%f}_{rnd:06x}_{ts:%s}".format(
+                ts=datetime.datetime.now(),
+                rnd=random.randint(0, 0xffffff)),
+            "results": [
+                {
+                    "address": "{}HC001".format(org_code),
+                    "description": "{} {} endpoint".format(org_code, workflow_id),
+                    "endpoint_type": "MESH"
+                }
+            ]
+        }
+        return Response(json.dumps(result), content_type='application/json')
 
     @responder
     def _fake_ndr(self, environ, start_response):
@@ -408,7 +459,7 @@ class FakeMeshApplication(object):
             with self.db_env.begin(self.metadata_db, write=True) as tx:
                 message = pickle.loads(tx.get(message_id.encode('ascii')))
                 self._update_tracking(
-                    tx, message,
+                    tx, message_id, message,
                     downloadTimestamp=datetime.datetime.now().strftime(TIMESTAMP_FORMAT)
                 )
                 assert message.recipient == mailbox
@@ -435,16 +486,30 @@ class FakeMeshApplication(object):
 
         return handle
 
-    def _update_tracking(self, tx, message, **kwargs):
+    def _update_tracking(self, tx, message_id, message, **kwargs):
         local_id = message.extra_headers.get('Mex-LocalID')
+        msg_id_key = MSG_TRACKING_PREFIX + message_id.encode('utf-8')
         if local_id:
             tracking_data = json.loads(
                 tx.get(local_id.encode('utf-8'), db=self.tracking_db).decode('utf-8')
             )
-            tracking_data.update(kwargs)
+        else:
+            raw_tracking_data = tx.get(msg_id_key, db=self.tracking_db)
+            if raw_tracking_data:
+                tracking_data = json.loads(raw_tracking_data.decode('utf-8'))
+            else:
+                tracking_data = make_tracking_data(message_id, message)
+        tracking_data.update(kwargs)
+        encoded_tracking_data = json.dumps(tracking_data).encode('utf-8')
+        tx.put(
+            msg_id_key,
+            encoded_tracking_data,
+            db=self.tracking_db
+        )
+        if local_id:
             tx.put(
                 local_id.encode('utf-8'),
-                json.dumps(tracking_data).encode('utf-8'),
+                encoded_tracking_data,
                 db=self.tracking_db
             )
 
@@ -452,7 +517,7 @@ class FakeMeshApplication(object):
         with self.db_env.begin(self.increment_db, write=True) as tx:
             message_num = int(tx.get(b'increment', b'0'))
             tx.put(b'increment', str(message_num + 1).encode('ascii'))
-            ts = self.timestamp_source().strftime(TIMESTAMP_FORMAT)
+            ts = self.timestamp_source().strftime(ID_TIMESTAMP_FORMAT)
             return "{ts}_{num:09d}".format(ts=ts, num=message_num)
 
     def list_messages(self, mailbox_id):
@@ -470,7 +535,7 @@ class FakeMeshApplication(object):
         message_key = message_id.encode('ascii')
         with self.db_env.begin(write=True) as tx:
             message = pickle.loads(tx.get(message_key, db=self.metadata_db))
-            self._update_tracking(tx, message, status='Acknowledged')
+            self._update_tracking(tx, message_id, message, status='Acknowledged')
             assert message.recipient == mailbox
             tx.delete(message_key, db=self.metadata_db)
             tx.delete(mailbox.encode('ascii'),

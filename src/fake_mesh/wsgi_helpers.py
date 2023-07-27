@@ -1,6 +1,9 @@
 from __future__ import print_function
 
 import logging
+from datetime import datetime
+import time
+
 import sys
 
 
@@ -66,6 +69,8 @@ class LoggingMiddleware(object):
                 return start_response(status, headers, exc_info)
 
         result = self._app(environ, inner_start_response)
-        self._logger.info("%s %s -> %s",
-                          method, uri, inner_start_response.status)
+        self._logger.info(
+            "%s - %s %s -> %s", time.time(),
+            method, uri, inner_start_response.status
+        )
         return result
